@@ -107,6 +107,10 @@ void OnSampleCallback(livox_status status, uint8_t handle, uint8_t response, voi
 void OnStopSampleCallback(livox_status status, uint8_t handle, uint8_t response, void *data) {
 }
 
+/** Callback function of set lidar mode. */
+void OnSetLidarModeCallback(livox_status status, uint8_t handle, uint8_t response, void *data) {
+  std::cout<<"切换雷达模式"<<std::endl;
+}
 /** Callback function of get LiDARs' extrinsic parameter. */
 void OnGetLidarExtrinsicParameter(livox_status status, uint8_t handle, LidarGetExtrinsicParameterResponse *response, void *data) {
   if (status == kStatusSuccess) {
@@ -220,6 +224,9 @@ void OnDeviceInfoChange(const DeviceInfo *info, DeviceEvent type) {
       }
       LidarStartSampling(handle, OnSampleCallback, nullptr);
       devices[handle].device_state = kDeviceStateSampling;
+    }else if (devices[handle].info.state == kLidarModePowerSaving) {
+      printf("Device Working State %d\n", devices[handle].info.state);
+      LidarSetMode(handle, LidarMode::kLidarModeNormal, OnSetLidarModeCallback, nullptr);
     }
   }
 }
@@ -482,6 +489,8 @@ int main(int argc, const char *argv[]) {
     if (devices[i].device_state == kDeviceStateSampling) {
       /** Stop the sampling of Livox LiDAR. */
       LidarStopSampling(devices[i].handle, OnStopSampleCallback, nullptr);
+
+      LidarSetMode(devices[i].handle, LidarMode::kLidarModePowerSaving, OnSetLidarModeCallback, nullptr);
     }
   }
 
