@@ -29,6 +29,8 @@
 #include <iostream>
 #include <thread>
 #include "lvx_file.h"
+#include <pcl/io/ply_io.h>
+#include <pcl/point_types.h>
 
 DeviceItem devices[kMaxLidarCount];
 LvxFileHandle lvx_file_handler;
@@ -44,7 +46,6 @@ bool is_read_extrinsic_from_xml = false;
 uint8_t connected_lidar_count = 0;
 
 #define FRAME_RATE 1
-
 using namespace std::chrono;
 
 /** Connect all the broadcast device in default and connect specific device when use program options or broadcast_code_list is not empty. */
@@ -378,6 +379,8 @@ int SetProgramOption(int argc, const char *argv[]) {
 }
 
 int main(int argc, const char *argv[]) {
+  pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+
   DisableConsoleLogger();
   /** Set the program options. */
   if (SetProgramOption(argc, argv))
@@ -412,7 +415,6 @@ int main(int argc, const char *argv[]) {
   printf("Start discovering device.\n");
 
   WaitForDevicesReady();
-
   AddDevicesToConnect();
 
   if (connected_lidar_count == 0) {
@@ -423,48 +425,63 @@ int main(int argc, const char *argv[]) {
 
   WaitForExtrinsicParameter();
 
-  printf("Start initialize lvx file.\n");
-  if (broadcast_code_list.size() != 1){
-    if (!lvx_file_handler.InitLvxFile()) {
-      Uninit();
-      return -1;
-    }
-  }else if (broadcast_code_list.size() == 1){
-    std::string filename;
-    filename = broadcast_code_list[0];
-    if (!lvx_file_handler.InitLvxFile(filename)) {
-      Uninit();
-      return -1;
-    }
-  }
-
   lvx_file_handler.InitLvxFileHeader();
-
   int i = 0;
   steady_clock::time_point last_time = steady_clock::now();
   for (i = 0; i < lvx_file_save_time * FRAME_RATE; ++i) {
+    std::cout<<"frame "<< i <<" of "<< lvx_file_save_time * FRAME_RATE <<" captured"<<std::endl;
+
     std::list<LvxBasePackDetail> point_packet_list_temp;
     {
       std::unique_lock<std::mutex> lock(mtx);
       point_pack_condition.wait_for(lock, milliseconds(kDefaultFrameDurationTime) - (steady_clock::now() - last_time));
       last_time = steady_clock::now();
       point_packet_list_temp.swap(point_packet_list);
+
+      auto head =point_packet_list_temp.begin();
+      for (; head != point_packet_list_temp.end(); head++) {
+        for(int i=0;i<96*sizeof(LivoxExtendRawPoint);i+=14) {  // XXXXYYYYZZZZI
+          pcl::PointXYZRGB p;
+          p.x = (float)((int32_t)((head->raw_point[i]) + (head->raw_point[i + 1] << 8) + (head->raw_point[i + 2] << 16) +
+                                  (head->raw_point[i + 3] << 24)))/1000;
+          p.y = (float)((int32_t)((head->raw_point[i + 4]) + (head->raw_point[i + 5] << 8) + (head->raw_point[i + 6] << 16) +
+                                  (head->raw_point[i + 7] << 24)))/1000;
+          p.z = (float)((int32_t)((head->raw_point[i + 8]) + (head->raw_point[i + 9] << 8) + (head->raw_point[i + 10] << 16) +
+                                  (head->raw_point[i + 11] << 24)))/1000;
+          srand(time(NULL));
+          p.r = (uint8_t)head->raw_point[i + 12];
+          p.g = 0;
+          p.b = (uint8_t)head->raw_point[i + 12];
+
+          cloud->points.push_back(p);
+        }
+      }
     }
     if(point_packet_list_temp.empty()) {
       printf("Point cloud packet is empty.\n");
       break;
     }
-    printf("Finish save %d frame to lvx file.\n", i);
-    lvx_file_handler.SaveFrameToLvxFile(point_packet_list_temp);
   }
 
-  lvx_file_handler.CloseLvxFile();
+  //輸出到ply文件
+  std::string filename;
+  if (broadcast_code_list.size() != 1){
+    time_t curtime = time(nullptr);
+    tm* local_time = localtime(&curtime);
+    char filenameC[30] = { 0 };
+    strftime(filenameC, sizeof(filenameC), "%Y-%m-%d_%H-%M-%S.ply", local_time);
+    filename = filenameC;
+  }else if (broadcast_code_list.size() == 1){
+    filename = broadcast_code_list[0];
+    filename += ".ply";
+  }
+  std::cout<<filename<<std::endl;
+  pcl::io::savePLYFileBinary(filename,*cloud);
 
   for (i = 0; i < kMaxLidarCount; ++i) {
     if (devices[i].device_state == kDeviceStateSampling) {
       /** Stop the sampling of Livox LiDAR. */
       LidarStopSampling(devices[i].handle, OnStopSampleCallback, nullptr);
-      LidarSetMode
     }
   }
 
